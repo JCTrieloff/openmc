@@ -18,6 +18,34 @@
 namespace openmc {
 
 //==============================================================================
+// Cascade Data
+//==============================================================================
+Cascades::Cascades(hid_t group)
+{
+  // Open dataset for lengths
+  auto len_dset = open_dataset(group, "lengths");
+
+  // Read lengths
+  read_dataset(len_dset, lengths_);
+  close_dataset(len_dset);
+
+  // Open dataset for Energies
+  auto erg_dset = open_dataset(group, "energies");
+
+  // Read Energies
+  read_dataset(erg_dset, energies_);
+  close_dataset(erg_dset);
+
+  // Fill vector of starting indices 
+  starts_.reserve(lengths_.size());
+  starts_.push_back(0);
+  starts_.push_back(lengths_[0]);
+  for (int i = 1; i < lengths_.size() -1; ++i){
+    starts_.push_back(starts_[i] + lengths_[i]);
+  }
+}
+
+//==============================================================================
 // ReactionProduct implementation
 //==============================================================================
 
@@ -52,6 +80,7 @@ ReactionProduct::ReactionProduct(hid_t group)
   // Read secondary particle yield
   yield_ = read_function(group, "yield");
 
+
   int n;
   read_attribute(group, "n_distribution", n);
 
@@ -81,6 +110,12 @@ ReactionProduct::ReactionProduct(hid_t group)
 
     close_group(dgroup);
   }
+
+  if (object_exists(group,"cascades")){
+    auto cascade_group = open_group(group, "cascades");
+    cascades_ = make_unique<Cascades>(cascade_group);
+    close_group(cascade_group);
+  } 
 }
 
 void ReactionProduct::sample(

@@ -23,6 +23,7 @@
 #include "openmc/simulation.h"
 #include "openmc/string_utils.h"
 #include "openmc/tallies/tally.h"
+#include "openmc/tallies/tally_scoring.h"
 #include "openmc/thermal.h"
 #include "openmc/weight_windows.h"
 
@@ -30,6 +31,9 @@
 
 #include <algorithm> // for max, min, max_element
 #include <cmath>     // for sqrt, exp, log, abs, copysign
+#include <fstream>
+#include <map>
+#include <set>
 #include <xtensor/xview.hpp>
 
 namespace openmc {
@@ -122,19 +126,21 @@ void sample_neutron_reaction(Particle& p)
     }
   }
 
-  // Create secondary photons
-  if (settings::photon_transport) {
-    sample_secondary_photons(p, i_nuclide);
-  }
-
   // If survival biasing is being used, the following subroutine adjusts the
   // weight of the particle. Otherwise, it checks to see if absorption occurs
 
   if (p.neutron_xs(i_nuclide).absorption > 0.0) {
     absorption(p, i_nuclide);
   }
-  if (!p.alive())
+  if (settings::survival_biasing == false && p.event_mt() == N_DISAPPEAR) {
+    // Create secondary photons.
+    // Done after absorption for analog photon sampling.
+    if (settings::photon_transport) {
+      sample_secondary_photons(p, i_nuclide);
+    }
+    p.wgt() = 0.;
     return;
+  }
 
   // Sample a scattering reaction and determine the secondary energy of the
   // exiting neutron
@@ -143,6 +149,12 @@ void sample_neutron_reaction(Particle& p)
     ncrystal_mat.scatter(p);
   } else {
     scatter(p, i_nuclide);
+  }
+
+  // Create secondary photons.
+  // Done after absorption and scatter for analog photon sampling.
+  if (settings::photon_transport) {
+    sample_secondary_photons(p, i_nuclide);
   }
 
   // Advance URR seed stream 'N' times after energy changes
@@ -616,6 +628,12 @@ void sample_photon_product(
   }
 }
 
+static std::array<ReactionType, 41> absorption_reactions {MISC, N_FISSION, N_F,
+  N_NF, N_2NF, N_3NF, N_GAMMA, N_P, N_D, N_T, N_3HE, N_A, N_2A, N_3A, N_2P,
+  N_PA, N_T2A, N_D2A, N_PD, N_PT, N_DA, N_TA, N_DT, N_P3HE, N_D3HE, N_3HEA,
+  N_3P, N_P0, N_PC, N_D0, N_DC, N_T0, N_TC, N_3HE0, N_3HEC, N_A0, N_AC,
+  PAIR_PROD_ELEC, PAIR_PROD, PAIR_PROD_NUC, PHOTOELECTRIC};
+
 void absorption(Particle& p, int i_nuclide)
 {
   if (settings::survival_biasing) {
@@ -643,9 +661,29 @@ void absorption(Particle& p, int i_nuclide)
                                      p.neutron_xs(i_nuclide).absorption;
       }
 
-      p.wgt() = 0.0;
+      // p.wgt() = 0.0; Must use weight in sampling gammas, even in ananlog
+      // mode, due to (n,2n)
+      p.E_last() = p.E();
       p.event() = TallyEvent::ABSORB;
       p.event_mt() = N_DISAPPEAR;
+
+      // Sample the exact disappearance reaction
+      p.analog_mt() = N_DISAPPEAR;
+      const double tot_disap_xs = p.neutron_xs(i_nuclide).absorption;
+      const double sampled_disap = prn(p.current_seed()) * tot_disap_xs;
+      double disap_sum = 0.;
+      for (const auto& mt : absorption_reactions) {
+        disap_sum += get_nuclide_xs(p, i_nuclide, mt);
+
+        if (disap_sum >= sampled_disap) {
+          p.analog_mt() = mt;
+          break;
+        }
+      }
+      if (p.analog_mt() == N_DISAPPEAR) {
+        // We shouldn't get here in theory. Just set to radiative capture
+        p.analog_mt() = N_GAMMA;
+      }
     }
   }
 }
@@ -682,6 +720,7 @@ void scatter(Particle& p, int i_nuclide)
     elastic_scatter(i_nuclide, *nuc->reactions_[0], kT, p);
 
     p.event_mt() = ELASTIC;
+    p.analog_mt() = ELASTIC;
     sampled = true;
   }
 
@@ -693,6 +732,7 @@ void scatter(Particle& p, int i_nuclide)
     sab_scatter(i_nuclide, micro.index_sab, p);
 
     p.event_mt() = ELASTIC;
+    p.analog_mt() = ELASTIC;
     sampled = true;
   }
 
@@ -713,6 +753,7 @@ void scatter(Particle& p, int i_nuclide)
     const auto& rx {nuc->reactions_[i]};
     inelastic_scatter(*nuc, *rx, p);
     p.event_mt() = rx->mt_;
+    p.analog_mt() = p.event_mt();
   }
 
   // Set event component
@@ -1141,7 +1182,23 @@ void inelastic_scatter(const Nuclide& nuc, const Reaction& rx, Particle& p)
   }
 }
 
-void sample_secondary_photons(Particle& p, int i_nuclide)
+static std::map<int, std::map<int, std::set<int>>> photon_reactions;
+
+void write_photon_reactions()
+{
+  std::ofstream fl("photons.txt");
+  for (const auto& za : photon_reactions) {
+    fl << za.first << ":\n";
+    for (const auto& mt : za.second) {
+      fl << "  " << mt.first << ":\n";
+      for (const auto& prod : mt.second) {
+        fl << "    " << prod << "\n";
+      }
+    }
+  }
+}
+
+void sample_secondary_photons_survival_biasing(Particle& p, int i_nuclide)
 {
   // Sample the number of photons produced
   double y_t =
@@ -1161,10 +1218,24 @@ void sample_secondary_photons(Particle& p, int i_nuclide)
     auto& rx = data::nuclides[i_nuclide]->reactions_[i_rx];
     double E;
     double mu;
-    rx->products_[i_product].sample(p.E(), E, mu, p.current_seed());
+    rx->products_[i_product].sample(p.E_last(), E, mu, p.current_seed());
+
+    int ZA =
+      data::nuclides[i_nuclide]->Z_ * 1000 + data::nuclides[i_nuclide]->A_;
+#pragma omp critical
+    {
+      photon_reactions[ZA][rx->mt_].insert(i_product);
+    }
 
     // Sample the new direction
     Direction u = rotate_angle(p.u(), mu, nullptr, p.current_seed());
+
+    // Determine weight previously absorbed in survival biasing
+    double wgt_absorb = 0.;
+    if (settings::survival_biasing) {
+      wgt_absorb = p.wgt() * p.neutron_xs(i_nuclide).absorption /
+                   p.neutron_xs(i_nuclide).total;
+    }
 
     // In a k-eigenvalue simulation, it's necessary to provide higher weight to
     // secondary photons from non-fission reactions to properly balance energy
@@ -1173,13 +1244,98 @@ void sample_secondary_photons(Particle& p, int i_nuclide)
     // calculations", Proc. PHYSOR, Cambridge, UK, Mar 29-Apr 2, 2020.
     double wgt;
     if (settings::run_mode == RunMode::EIGENVALUE && !is_fission(rx->mt_)) {
-      wgt = simulation::keff * p.wgt();
+      wgt = simulation::keff * (p.wgt() + wgt_absorb);
     } else {
-      wgt = p.wgt();
+      wgt = p.wgt() + wgt_absorb;
     }
 
     // Create the secondary photon
     p.create_secondary(wgt, u, E, ParticleType::photon);
+  }
+}
+
+void sample_secondary_photons_analog(Particle& p, int i_nuclide)
+{
+  // sample_secondary_photons_survival_biasing(p, i_nuclide);
+  const auto mt = p.analog_mt();
+  const auto& nuc = data::nuclides[i_nuclide];
+  const auto i_rx = nuc->reaction_index_[mt];
+  if (i_rx == C_NONE) {
+    return;
+  }
+
+  // Incident energy of neutron
+  const double Ein = p.E_last();
+
+  // Get reference to the reaction
+  const auto& rx = nuc->reactions_[i_rx];
+  auto i_rp = C_NONE;
+  bool multiple_photon_products = false;
+  double gamma_yield_sum = 0.;
+  for (int i = 0; i < rx->products_.size(); i++) {
+    if (rx->products_[i].particle_ == ParticleType::photon) {
+      gamma_yield_sum += (*rx->products_[i].yield_)(Ein);
+    }
+  }
+
+  const double rng_gamma_yield_sum = prn(p.current_seed()) * gamma_yield_sum;
+  gamma_yield_sum = 0.;
+  for (int i = 0; i < rx->products_.size(); i++) {
+    if (rx->products_[i].particle_ == ParticleType::photon) {
+      i_rp = i;
+      gamma_yield_sum += (*rx->products_[i].yield_)(Ein);
+      if (gamma_yield_sum >= rng_gamma_yield_sum)
+        break;
+    }
+  }
+
+  // If no products were photons, we can just exit
+  if (i_rp == C_NONE) {
+    return;
+  }
+
+  int ZA = data::nuclides[i_nuclide]->Z_ * 1000 + data::nuclides[i_nuclide]->A_;
+
+#pragma omp critical
+  {
+    photon_reactions[ZA][rx->mt_].insert(i_rp);
+  }
+
+  // Get reference to the ReactionProduct
+  const auto& rp = rx->products_[i_rp];
+
+  if (rp.cascades_) {
+    // If cascade data exists then sample photon energies from cascade file
+    auto cascade = rp.cascades_->sample_cascade(prn(p.current_seed()));
+
+    for (const auto Eout : cascade) {
+      double mu = 2. * prn(p.current_seed()) - 1.;
+      Direction u = rotate_angle(p.u(), mu, nullptr, p.current_seed());
+      p.create_secondary(p.wgt(), u, Eout, ParticleType::photon);
+    }
+  } else {
+    // if no cascade file then use ACE data
+    const double yield = p.wgt() * (*rp.yield_)(Ein);
+    int ngamma = static_cast<int>(yield);
+    const double P_extra = yield - static_cast<double>(ngamma);
+    if (prn(p.current_seed()) < P_extra)
+      ngamma++;
+
+    for (int i = 0; i < ngamma; i++) {
+      double Eout, mu;
+      rp.sample(Ein, Eout, mu, p.current_seed());
+      Direction u = rotate_angle(p.u(), mu, nullptr, p.current_seed());
+      p.create_secondary(1., u, Eout, ParticleType::photon);
+    }
+  }
+}
+
+void sample_secondary_photons(Particle& p, int i_nuclide)
+{
+  if (settings::survival_biasing) {
+    sample_secondary_photons_survival_biasing(p, i_nuclide);
+  } else {
+    sample_secondary_photons_analog(p, i_nuclide);
   }
 }
 

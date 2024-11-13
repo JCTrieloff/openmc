@@ -7,6 +7,7 @@
 #include "openmc/message_passing.h"
 #include "openmc/particle_restart.h"
 #include "openmc/settings.h"
+#include "openmc/physics.h"
 
 int main(int argc, char* argv[])
 {
@@ -54,6 +55,8 @@ int main(int argc, char* argv[])
   err = openmc_finalize();
   if (err)
     fatal_error(openmc_err_msg);
+
+  write_photon_reactions();
 
     // If MPI is in use and enabled, terminate it
 #ifdef OPENMC_MPI

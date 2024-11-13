@@ -82,6 +82,7 @@ void NCrystalMat::scatter(Particle& p) const
     Direction(outcome.direction[0], outcome.direction[1], outcome.direction[2]);
   p.mu() = u_old.dot(p.u());
   p.event_mt() = ELASTIC;
+  p.analog_mt() = ELASTIC;
 }
 
 NCrystalMat::operator bool() const

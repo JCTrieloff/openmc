@@ -4,8 +4,8 @@
 #include <cmath>
 #include <vector>
 
-#include <gsl/gsl-lite.hpp>
-
+#include "gsl/gsl-lite.hpp"
+#include "openmc/constants.h"
 #include "openmc/error.h"
 #include "openmc/search.h"
 
@@ -50,7 +50,7 @@ inline double interpolate_lagrangian(gsl::span<const double> xs,
       numerator *= (x - xs[idx + j]);
       denominator *= (xs[idx + i] - xs[idx + j]);
     }
-    output += (numerator / denominator) * ys[idx + i];
+    output += (numerator / denominator) * ys[i];
   }
 
   return output;

@@ -50,8 +50,6 @@ public:
 
   // Methods that can be overridden
   virtual double strength() const { return 1.0; }
-
-  static unique_ptr<Source> create(pugi::xml_node node);
 };
 
 //==============================================================================
@@ -103,13 +101,12 @@ private:
 class FileSource : public Source {
 public:
   // Constructors
-  explicit FileSource(pugi::xml_node node);
-  explicit FileSource(const std::string& path);
+  explicit FileSource(std::string path);
+  explicit FileSource(const vector<SourceSite>& sites) : sites_ {sites} {}
 
   // Methods
   SourceSite sample(uint64_t* seed) const override;
-  void load_sites_from_file(
-    const std::string& path); //!< Load source sites from file
+
 private:
   vector<SourceSite> sites_; //!< Source sites from a file
 };
@@ -121,7 +118,7 @@ private:
 class CompiledSourceWrapper : public Source {
 public:
   // Constructors, destructors
-  CompiledSourceWrapper(pugi::xml_node node);
+  CompiledSourceWrapper(std::string path, std::string parameters);
   ~CompiledSourceWrapper();
 
   // Defer implementation to custom source library
@@ -132,43 +129,12 @@ public:
 
   double strength() const override { return compiled_source_->strength(); }
 
-  void setup(const std::string& path, const std::string& parameters);
-
 private:
   void* shared_library_; //!< library from dlopen
   unique_ptr<Source> compiled_source_;
 };
 
 typedef unique_ptr<Source> create_compiled_source_t(std::string parameters);
-
-//==============================================================================
-//! Mesh-based source with different distributions for each element
-//==============================================================================
-
-class MeshSource : public Source {
-public:
-  // Constructors
-  explicit MeshSource(pugi::xml_node node);
-
-  //! Sample from the external source distribution
-  //! \param[inout] seed Pseudorandom seed pointer
-  //! \return Sampled site
-  SourceSite sample(uint64_t* seed) const override;
-
-  // Properties
-  double strength() const override { return space_->total_strength(); }
-
-  // Accessors
-  const std::unique_ptr<Source>& source(int32_t i) const
-  {
-    return sources_.size() == 1 ? sources_[0] : sources_[i];
-  }
-
-private:
-  // Data members
-  unique_ptr<MeshSpatial> space_;           //!< Mesh spatial
-  vector<std::unique_ptr<Source>> sources_; //!< Source distributions
-};
 
 //==============================================================================
 // Functions

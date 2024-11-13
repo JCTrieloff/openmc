@@ -44,6 +44,7 @@ class Product(EqualityMixin):
         self.emission_mode = 'prompt'
         self.particle = particle
         self.yield_ = Polynomial((1,))  # 0-order polynomial, i.e., a constant
+        self.cascades = None
 
     def __repr__(self):
         if isinstance(self.yield_, Tabulated1D):
@@ -132,6 +133,25 @@ class Product(EqualityMixin):
         # Write yield
         self.yield_.to_hdf5(group, 'yield')
 
+        # write Cascade 
+        if self.cascades is not None:
+            lengths = []
+            for i in range(len(self.cascades)):
+                lengths.append(len(self.cascades[i]))  #assign length of each list into list lengths
+            #for row in self.cascades:
+                #energies.extend(row)                   
+            energies = []
+            for e in self.cascades:
+                for energy in e:
+                  energies.append(energy)
+            cascades = group.create_group('cascades')  #create group cascades
+            len_ds = cascades.create_dataset('lengths', len(lengths), dtype = 'i') #store dataset lengths in cascades as integers
+            eng_ds = cascades.create_dataset('energies', len(energies)) #create dataset energies in cascades 
+            for i in range(len(lengths)):
+                len_ds[i] = lengths[i]
+            for i in range(len(energies)):
+                eng_ds[i] = energies[i]
+
         # Write applicability/distribution
         group.attrs['n_distribution'] = len(self.distribution)
         for i, d in enumerate(self.distribution):
@@ -164,6 +184,17 @@ class Product(EqualityMixin):
 
         # Read yield
         p.yield_ = Function1D.from_hdf5(group['yield'])
+
+        # Read Cascade 
+        #if cascade in group  then we can read otherwise none
+        if 'cascades' in group:   
+            p.cascades = []
+            lengths = list(group['cascades']['lengths'][:])
+            energies = list(group['cascades']['energies'][:]) 
+            start = 0 
+            for length in lengths:
+                p.cascades.append(energies[start:start+length])
+                start += length
 
         # Read applicability/distribution
         n_distribution = group.attrs['n_distribution']

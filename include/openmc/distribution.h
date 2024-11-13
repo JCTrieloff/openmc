@@ -7,7 +7,6 @@
 #include <cstddef> // for size_t
 
 #include "pugixml.hpp"
-#include <gsl/gsl-lite.hpp>
 
 #include "openmc/constants.h"
 #include "openmc/memory.h" // for unique_ptr
@@ -44,9 +43,9 @@ class DiscreteIndex {
 public:
   DiscreteIndex() {};
   DiscreteIndex(pugi::xml_node node);
-  DiscreteIndex(gsl::span<const double> p);
+  DiscreteIndex(const double* p, int n);
 
-  void assign(gsl::span<const double> p);
+  void assign(const double* p, int n);
 
   //! Sample a value from the distribution
   //! \param seed Pseudorandom number seed pointer
@@ -78,7 +77,7 @@ private:
 class Discrete : public Distribution {
 public:
   explicit Discrete(pugi::xml_node node);
-  Discrete(const double* x, const double* p, size_t n);
+  Discrete(const double* x, const double* p, int n);
 
   //! Sample a value from the distribution
   //! \param seed Pseudorandom number seed pointer

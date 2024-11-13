@@ -104,6 +104,8 @@ void score_surface_tally(Particle& p, const vector<int>& tallies);
 //! \param tallies A vector of the indices of the tallies to score to
 void score_pulse_height_tally(Particle& p, const vector<int>& tallies);
 
+double get_nuclide_xs(const Particle& p, int i_nuclide, int mt);
+
 } // namespace openmc
 
 #endif // OPENMC_TALLIES_TALLY_SCORING_H

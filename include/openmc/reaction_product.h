@@ -12,7 +12,31 @@
 #include "openmc/particle.h"
 #include "openmc/vector.h" // for vector
 
+#include <gsl/gsl-lite.hpp>
+
 namespace openmc {
+
+//==============================================================================
+//! Class for secondary gamma cascade data
+//==============================================================================
+
+class Cascades{
+public:
+//! Secondary Gamma from HDF5
+  explicit Cascades(hid_t group);
+
+  gsl::span<const double> sample_cascade(double xi) const {
+      std::size_t index = xi * lengths_.size();                //  randomly sampled index of cascade lengths
+      const double* strt = energies_.data() + starts_[index];  // starting address of sampled cascade energies
+      const double* end  = strt + lengths_[index];             // ending address of sampled cascade energies
+      return gsl::span<const double>(strt, end);               //write for new sample 
+  }                 
+
+private:
+  std::vector<std::size_t> lengths_;
+  std::vector<double> energies_;
+  std::vector<std::size_t> starts_;
+};
 
 //==============================================================================
 //! Data for a reaction product including its yield and angle-energy
@@ -50,6 +74,7 @@ public:
   unique_ptr<Function1D> yield_;      //!< Yield as a function of energy
   vector<Tabulated1D> applicability_; //!< Applicability of distribution
   vector<Secondary> distribution_;    //!< Secondary angle-energy distribution
+  unique_ptr<Cascades> cascades_;     //!< Cascades from cascade generator
 };
 
 } // namespace openmc
