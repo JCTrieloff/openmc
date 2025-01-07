@@ -1269,29 +1269,6 @@ void sample_secondary_photons_analog(Particle& p, int i_nuclide)
 
   // Get reference to the reaction
   const auto& rx = nuc->reactions_[i_rx];
-  // auto i_rp = C_NONE;
-  // double gamma_yield_sum = 0.;
-  // for (int i = 0; i < rx->products_.size(); i++) {
-  //   if (rx->products_[i].particle_ == ParticleType::photon) {
-  //     gamma_yield_sum += (*rx->products_[i].yield_)(Ein);
-  //   }
-  // }
-  //
-  // const double rng_gamma_yield_sum = prn(p.current_seed()) * gamma_yield_sum;
-  // gamma_yield_sum = 0.;
-  // for (int i = 0; i < rx->products_.size(); i++) {
-  //   if (rx->products_[i].particle_ == ParticleType::photon) {
-  //     i_rp = i;
-  //     gamma_yield_sum += (*rx->products_[i].yield_)(Ein);
-  //     if (gamma_yield_sum >= rng_gamma_yield_sum)
-  //       break;
-  //   }
-  // }
-
-  // If no products were photons, we can just exit
-  // if (i_rp == C_NONE) {
-  //   return;
-  // }
 
   //  int ZA = data::nuclides[i_nuclide]->Z_ * 1000 +
   //  data::nuclides[i_nuclide]->A_;
@@ -1300,9 +1277,6 @@ void sample_secondary_photons_analog(Particle& p, int i_nuclide)
   //  {
   //    photon_reactions[ZA][rx->mt_].insert(i_rp);
   //  }
-
-  // Get reference to the ReactionProduct
-  // const auto& rp = rx->products_[i_rp];
 
   // if (rp.cascades_) {
   //   // If cascade data exists then sample photon energies from cascade file
@@ -1313,38 +1287,34 @@ void sample_secondary_photons_analog(Particle& p, int i_nuclide)
   //     Direction u = rotate_angle(p.u(), mu, nullptr, p.current_seed());
   //     p.create_secondary(p.wgt(), u, Eout, ParticleType::photon);
   //   }
-  // if no cascade file then use ACE data
-  // const double yield = p.wgt() * (*rp.yield_)(Ein);
-  // int ngamma = static_cast<int>(yield);
-  // const double P_extra = yield - static_cast<double>(ngamma);
-  // if (prn(p.current_seed()) < P_extra)
-  //   ngamma++;
+  int ZA = data::nuclides[i_nuclide]->Z_ * 1000 + data::nuclides[i_nuclide]->A_;
 
-  // for (int i = 0; i < ngamma; i++) {
-  //   double Eout, mu;
-  //   rp.sample(Ein, Eout, mu, p.current_seed());
-  //   Direction u = rotate_angle(p.u(), mu, nullptr, p.current_seed());
-  //   p.create_secondary(1., u, Eout, ParticleType::photon);
-  // }
+  int i_rp = 0;
   for (const auto& rp : rx->products_) {
     if (rp.particle_ != ParticleType::photon) {
+      i_rp++;
       continue;
     }
     if (rp.cascades_) {
       // TODO: Implement this. No cascades for now
     }
     const double yield = (*rp.yield_)(Ein);
-    int ngamma = static_cast<int>(yield);
-    const double P_extra = yield - ngamma;
-    if (prn(p.current_seed()) < P_extra) {
-      ngamma++;
+    const int ngamma = static_cast<int>(yield + prn(p.current_seed()));
+    if (ngamma > 0) {
+#pragma omp critical
+      {
+        photon_reactions[ZA][rx->mt_].insert(i_rp);
+      }
     }
     for (int i = 0; i < ngamma; i++) {
       double Eout, mu;
       rp.sample(Ein, Eout, mu, p.current_seed());
       Direction u = rotate_angle(p.u(), mu, nullptr, p.current_seed());
-      p.create_secondary(1., u, Eout, ParticleType::photon);
+      p.create_secondary(p.wgt_last(), u, Eout,
+        ParticleType::photon); // TODO: Is this supposed to be wgt or
+                               // wgt_last???
     }
+    i_rp++;
   }
 }
 
