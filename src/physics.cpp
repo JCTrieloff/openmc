@@ -1299,6 +1299,20 @@ void sample_secondary_photons_analog(Particle& p, int i_nuclide)
       // TODO: Implement this. No cascades for now
     }
     const double yield = (*rp.yield_)(Ein);
+    //     if (i_rp == 46) {
+    //       int yield_order = static_cast<int>(std::log10(yield));
+    // #pragma omp critical
+    //       {
+    //         if (!photon_reactions[i_rp][rx->mt_].empty()) {
+    //           if (*photon_reactions[i_rp][rx->mt_].begin() < yield_order) {
+    //             photon_reactions[i_rp][rx->mt_].clear();
+    //             photon_reactions[i_rp][rx->mt_].insert(yield_order);
+    //           }
+    //         } else {
+    //           photon_reactions[i_rp][rx->mt_].insert(yield_order);
+    //         }
+    //       }
+    //     }
     const int ngamma = static_cast<int>(yield + prn(p.current_seed()));
     if (ngamma > 0) {
 #pragma omp critical
@@ -1310,7 +1324,7 @@ void sample_secondary_photons_analog(Particle& p, int i_nuclide)
       double Eout, mu;
       rp.sample(Ein, Eout, mu, p.current_seed());
       Direction u = rotate_angle(p.u(), mu, nullptr, p.current_seed());
-      p.create_secondary(p.wgt_last(), u, Eout,
+      p.create_secondary(p.wgt(), u, Eout,
         ParticleType::photon); // TODO: Is this supposed to be wgt or
                                // wgt_last???
     }
@@ -1318,8 +1332,52 @@ void sample_secondary_photons_analog(Particle& p, int i_nuclide)
   }
 }
 
+void check_photon_prod_xs(int i_nuclide, Particle& p)
+{
+  // Get grid index and interpolation factor and sample photon production cdf
+  const auto& micro = p.neutron_xs(i_nuclide);
+  double prob = 0.0;
+
+  // Loop through each reaction type
+  const auto& nuc {data::nuclides[i_nuclide]};
+  for (int i = 0; i < nuc->reactions_.size(); ++i) {
+    // Evaluate neutron cross section
+    const auto& rx = nuc->reactions_[i];
+    double xs = rx->xs(micro);
+
+    // if cross section is zero for this reaction, skip it
+    if (xs == 0.0)
+      continue;
+
+    for (int j = 0; j < rx->products_.size(); ++j) {
+      if (rx->products_[j].particle_ == ParticleType::photon) {
+        // For fission, artificially increase the photon yield to account
+        // for delayed photons
+        double f = 1.0;
+        if (settings::delayed_photon_scaling) {
+          if (is_fission(rx->mt_)) {
+            if (nuc->prompt_photons_ && nuc->delayed_photons_) {
+              double energy_prompt = (*nuc->prompt_photons_)(p.E());
+              double energy_delayed = (*nuc->delayed_photons_)(p.E());
+              f = (energy_prompt + energy_delayed) / (energy_prompt);
+            }
+          }
+        }
+
+        // add to cumulative probability
+        prob += f * (*rx->products_[j].yield_)(p.E()) * xs;
+      }
+    }
+  }
+  if (prob != micro.photon_prod) {
+    std::cout << "Probability and photon_prod do not match. Difference: "
+              << std::abs(micro.photon_prod - prob) / prob << "\n";
+  }
+}
+
 void sample_secondary_photons(Particle& p, int i_nuclide)
 {
+  // check_photon_prod_xs(i_nuclide, p);
   if (settings::survival_biasing) {
     sample_secondary_photons_survival_biasing(p, i_nuclide);
   } else {
