@@ -1338,6 +1338,11 @@ void check_photon_prod_xs(int i_nuclide, Particle& p)
   const auto& micro = p.neutron_xs(i_nuclide);
   double prob = 0.0;
 
+  if (p.E() != p.E_last()) {
+    std::cout << "E_last: " << p.E_last() << "\tE: " << p.E()
+              << "\txs E: " << p.neutron_xs(i_nuclide).last_E << "\n";
+  }
+
   // Loop through each reaction type
   const auto& nuc {data::nuclides[i_nuclide]};
   for (int i = 0; i < nuc->reactions_.size(); ++i) {
@@ -1369,20 +1374,20 @@ void check_photon_prod_xs(int i_nuclide, Particle& p)
       }
     }
   }
-  if (prob != micro.photon_prod) {
+  if (std::abs(prob - micro.photon_prod) / prob > 0.01) {
     std::cout << "Probability and photon_prod do not match. Difference: "
-              << std::abs(micro.photon_prod - prob) / prob << "\n";
+              << std::abs(micro.photon_prod - prob) / prob << "%\n";
   }
 }
 
 void sample_secondary_photons(Particle& p, int i_nuclide)
 {
-  // check_photon_prod_xs(i_nuclide, p);
   if (settings::survival_biasing) {
     sample_secondary_photons_survival_biasing(p, i_nuclide);
   } else {
     sample_secondary_photons_analog(p, i_nuclide);
   }
+  // check_photon_prod_xs(i_nuclide, p);
 }
 
 } // namespace openmc
